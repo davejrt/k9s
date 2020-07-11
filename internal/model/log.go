@@ -8,6 +8,7 @@ import (
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/color"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/rs/zerolog/log"
@@ -37,6 +38,7 @@ type Log struct {
 	filter       string
 	lastSent     int
 	flushTimeout time.Duration
+	filtering    bool
 }
 
 // NewLog returns a new model.
@@ -51,6 +53,9 @@ func NewLog(gvr client.GVR, opts dao.LogOptions, flushTimeout time.Duration) *Lo
 
 // LogOptions returns the current log options.
 func (l *Log) LogOptions() dao.LogOptions {
+	l.mx.RLock()
+	defer l.mx.RUnlock()
+
 	return l.logOptions
 }
 
@@ -58,12 +63,18 @@ func (l *Log) LogOptions() dao.LogOptions {
 func (l *Log) SinceSeconds() int64 {
 	l.mx.RLock()
 	defer l.mx.RUnlock()
+
 	return l.logOptions.SinceSeconds
 }
 
 // SetLogOptions updates logger options.
 func (l *Log) SetLogOptions(opts dao.LogOptions) {
-	l.logOptions = opts
+	l.mx.Lock()
+	{
+		l.logOptions = opts
+	}
+	l.mx.Unlock()
+
 	l.Restart()
 }
 
@@ -95,6 +106,7 @@ func (l *Log) Clear() {
 		l.lines, l.lastSent = dao.LogItems{}, 0
 	}
 	l.mx.Unlock()
+
 	l.fireLogCleared()
 }
 
@@ -147,16 +159,24 @@ func (l *Log) ClearFilter() {
 	l.fireLogChanged(l.lines)
 }
 
-// Filter filters the model using either fuzzy or regexp.
-func (l *Log) Filter(q string) error {
-	l.mx.RLock()
-	defer l.mx.RUnlock()
+// Filter filters th:e model using either fuzzy or regexp.
+func (l *Log) Filter(q string) {
+	l.mx.Lock()
+	defer l.mx.Unlock()
 
 	l.filter = q
-	l.fireLogCleared()
-	l.fireLogBuffChanged(l.lines)
-
-	return nil
+	if l.filtering {
+		return
+	}
+	l.filtering = true
+	go func(l *Log) {
+		<-time.After(500 * time.Millisecond)
+		l.mx.Lock()
+		defer l.mx.Unlock()
+		l.fireLogCleared()
+		l.fireLogBuffChanged(l.lines)
+		l.filtering = false
+	}(l)
 }
 
 func (l *Log) load() error {
@@ -212,11 +232,11 @@ func (l *Log) Append(line *dao.LogItem) {
 }
 
 // Notify fires of notifications to the listeners.
-func (l *Log) Notify(timedOut bool) {
+func (l *Log) Notify() {
 	l.mx.Lock()
 	defer l.mx.Unlock()
 
-	if timedOut && l.lastSent < len(l.lines) {
+	if l.lastSent < len(l.lines) {
 		l.fireLogBuffChanged(l.lines[l.lastSent:])
 		l.lastSent = len(l.lines)
 	}
@@ -232,7 +252,7 @@ func (l *Log) updateLogs(ctx context.Context, c dao.LogChan) {
 			if !ok {
 				log.Debug().Msgf("Closed channel detected. Bailing out...")
 				l.Append(item)
-				l.Notify(true)
+				l.Notify()
 				return
 			}
 			l.Append(item)
@@ -243,10 +263,10 @@ func (l *Log) updateLogs(ctx context.Context, c dao.LogChan) {
 			}
 			l.mx.RUnlock()
 			if overflow {
-				l.Notify(true)
+				l.Notify()
 			}
 		case <-time.After(l.flushTimeout):
-			l.Notify(true)
+			l.Notify()
 		case <-ctx.Done():
 			return
 		}
@@ -277,31 +297,38 @@ func applyFilter(q string, lines dao.LogItems) (dao.LogItems, error) {
 	if q == "" {
 		return lines, nil
 	}
-	indexes, err := lines.Filter(q)
+	matches, indices, err := lines.Filter(q)
 	if err != nil {
 		return nil, err
 	}
+
 	// No filter!
-	if indexes == nil {
+	if matches == nil {
 		return lines, nil
 	}
 	// Blank filter
-	if len(indexes) == 0 {
+	if len(matches) == 0 {
 		return nil, nil
 	}
-	filtered := make(dao.LogItems, 0, len(indexes))
-	for _, idx := range indexes {
-		filtered = append(filtered, lines[idx])
+	filtered := make(dao.LogItems, 0, len(matches))
+	for i, idx := range matches {
+		item := lines[idx].Clone()
+		item.Bytes = color.Highlight(item.Bytes, indices[i], 209)
+		filtered = append(filtered, item)
 	}
 
 	return filtered, nil
 }
 
 func (l *Log) fireLogBuffChanged(lines dao.LogItems) {
-	filtered, err := applyFilter(l.filter, lines)
-	if err != nil {
-		l.fireLogError(err)
-		return
+	filtered := lines
+	if l.filter != "" {
+		var err error
+		filtered, err = applyFilter(l.filter, lines)
+		if err != nil {
+			l.fireLogError(err)
+			return
+		}
 	}
 	if len(filtered) > 0 {
 		l.fireLogChanged(filtered)

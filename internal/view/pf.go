@@ -49,18 +49,30 @@ func (p *PortForward) bindKeys(aa ui.KeyActions) {
 	aa.Add(ui.KeyActions{
 		tcell.KeyEnter: ui.NewKeyAction("View Benchmarks", p.showBenchCmd, true),
 		tcell.KeyCtrlL: ui.NewKeyAction("Benchmark Run/Stop", p.toggleBenchCmd, true),
-		tcell.KeyCtrlD: ui.NewKeyAction("Delete", p.deleteCmd, true),
+		tcell.KeyCtrlX: ui.NewKeyAction("Delete", p.deleteCmd, true),
 		ui.KeyShiftP:   ui.NewKeyAction("Sort Ports", p.GetTable().SortColCmd("PORTS", true), false),
 		ui.KeyShiftU:   ui.NewKeyAction("Sort URL", p.GetTable().SortColCmd("URL", true), false),
 	})
 }
 
 func (p *PortForward) showBenchCmd(evt *tcell.EventKey) *tcell.EventKey {
-	if err := p.App().inject(NewBenchmark(client.NewGVR("benchmarks"))); err != nil {
+	b := NewBenchmark(client.NewGVR("benchmarks"))
+	b.SetContextFn(p.getContext)
+	if err := p.App().inject(b); err != nil {
 		p.App().Flash().Err(err)
 	}
 
 	return nil
+}
+
+func (p *PortForward) getContext(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, internal.KeyDir, benchDir(p.App().Config))
+	path := p.GetTable().GetSelectedItem()
+	if path == "" {
+		return ctx
+	}
+
+	return context.WithValue(ctx, internal.KeyPath, path)
 }
 
 func (p *PortForward) toggleBenchCmd(evt *tcell.EventKey) *tcell.EventKey {

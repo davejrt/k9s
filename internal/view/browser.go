@@ -73,7 +73,6 @@ func (b *Browser) Init(ctx context.Context) error {
 	if row == 0 && b.GetRowCount() > 0 {
 		b.Select(1, 0)
 	}
-	b.GetModel().AddListener(b)
 	b.GetModel().SetRefreshRate(time.Duration(b.App().Config.K9s.GetRefreshRate()) * time.Second)
 
 	b.CmdBuff().SetSuggestionFn(b.suggestFilter())
@@ -92,15 +91,12 @@ func (b *Browser) suggestFilter() model.SuggestionFunc {
 
 		s = strings.ToLower(s)
 		for _, h := range b.App().filterHistory.List() {
-			if h == s {
+			if s == h {
 				continue
 			}
 			if strings.HasPrefix(h, s) {
 				entries = append(entries, strings.Replace(h, s, "", 1))
 			}
-		}
-		if len(entries) == 0 {
-			return nil
 		}
 		return
 	}
@@ -126,6 +122,7 @@ func (b *Browser) Start() {
 	}
 
 	b.Stop()
+	b.GetModel().AddListener(b)
 	b.Table.Start()
 	b.CmdBuff().AddListener(b)
 	b.GetModel().Watch(b.prepareContext())
@@ -133,27 +130,38 @@ func (b *Browser) Start() {
 
 // Stop terminates browser updates.
 func (b *Browser) Stop() {
-	b.CmdBuff().RemoveListener(b)
-	b.Table.Stop()
+	log.Debug().Msgf("BRO-STOP %v", b.GVR())
 	if b.cancelFn != nil {
+		log.Debug().Msgf("Canceling!!")
 		b.cancelFn()
 		b.cancelFn = nil
 	}
+	b.GetModel().RemoveListener(b)
+	b.CmdBuff().RemoveListener(b)
+	b.Table.Stop()
 }
 
 // BufferChanged indicates the buffer was changed.
-func (b *Browser) BufferChanged(s string) {}
+func (b *Browser) BufferChanged(s string) {
+	if ui.IsLabelSelector(s) {
+		b.GetModel().SetLabelFilter(ui.TrimLabelSelector(s))
+	} else {
+		b.GetModel().SetLabelFilter("")
+	}
+}
 
 // BufferActive indicates the buff activity changed.
 func (b *Browser) BufferActive(state bool, k model.BufferKind) {
-	if b.cancelFn != nil {
-		b.cancelFn()
+	if state {
+		return
 	}
-	b.GetModel().Watch(b.prepareContext())
-
-	if !state && b.GetRowCount() > 1 {
-		b.App().filterHistory.Push(b.CmdBuff().GetText())
-	}
+	b.GetModel().Refresh(b.prepareContext())
+	b.app.QueueUpdateDraw(func() {
+		b.Update(b.GetModel().Peek())
+		if b.GetRowCount() > 1 {
+			b.App().filterHistory.Push(b.CmdBuff().GetText())
+		}
+	})
 }
 
 func (b *Browser) prepareContext() context.Context {
@@ -192,9 +200,10 @@ func (b *Browser) Aliases() []string {
 
 // TableDataChanged notifies view new data is available.
 func (b *Browser) TableDataChanged(data render.TableData) {
-	if !b.app.ConOK() {
+	if !b.app.ConOK() || b.cancelFn == nil {
 		return
 	}
+
 	b.app.QueueUpdateDraw(func() {
 		b.refreshActions()
 		b.Update(data)
@@ -235,15 +244,14 @@ func (b *Browser) viewCmd(evt *tcell.EventKey) *tcell.EventKey {
 
 func (b *Browser) resetCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if !b.CmdBuff().InCmdMode() {
-		b.CmdBuff().Reset()
+		b.CmdBuff().ClearText(false)
 		return b.App().PrevCmd(evt)
 	}
 
+	b.CmdBuff().Reset()
 	if ui.IsLabelSelector(b.CmdBuff().GetText()) {
-		b.CmdBuff().Reset()
 		b.Start()
 	}
-	b.CmdBuff().Reset()
 	b.Refresh()
 
 	return nil
@@ -399,22 +407,23 @@ func (b *Browser) setNamespace(ns string) {
 }
 
 func (b *Browser) defaultContext() context.Context {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, internal.KeyFactory, b.app.factory)
+	ctx := context.WithValue(context.Background(), internal.KeyFactory, b.app.factory)
 	ctx = context.WithValue(ctx, internal.KeyGVR, b.GVR().String())
-	ctx = context.WithValue(ctx, internal.KeyPath, b.Path)
-
-	ctx = context.WithValue(ctx, internal.KeyLabels, "")
+	if b.Path != "" {
+		ctx = context.WithValue(ctx, internal.KeyPath, b.Path)
+	}
 	if ui.IsLabelSelector(b.CmdBuff().GetText()) {
 		ctx = context.WithValue(ctx, internal.KeyLabels, ui.TrimLabelSelector(b.CmdBuff().GetText()))
 	}
-	ctx = context.WithValue(ctx, internal.KeyFields, "")
 	ctx = context.WithValue(ctx, internal.KeyNamespace, client.CleanseNamespace(b.App().Config.ActiveNamespace()))
 
 	return ctx
 }
 
 func (b *Browser) refreshActions() {
+	if b.App().Content.Top().Name() != b.Name() {
+		return
+	}
 	aa := ui.KeyActions{
 		ui.KeyC:        ui.NewKeyAction("Copy", b.cpCmd, false),
 		tcell.KeyEnter: ui.NewKeyAction("View", b.enterCmd, false),
@@ -428,7 +437,7 @@ func (b *Browser) refreshActions() {
 				aa[ui.KeyE] = ui.NewKeyAction("Edit", b.editCmd, true)
 			}
 			if client.Can(b.meta.Verbs, "delete") {
-				aa[tcell.KeyCtrlD] = ui.NewKeyAction("Delete", b.deleteCmd, true)
+				aa[tcell.KeyCtrlX] = ui.NewKeyAction("Delete", b.deleteCmd, true)
 			}
 		}
 	}

@@ -306,8 +306,11 @@ func (p *Pulse) enterCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if !ok {
 		return nil
 	}
-	gvr := client.NewGVR(s.ID())
-	if err := p.App().gotoResource(gvr.R()+" all", "", false); err != nil {
+	res := client.NewGVR(s.ID()).R()
+	if res == "cpu" || res == "mem" {
+		res = "pod"
+	}
+	if err := p.App().gotoResource(res+" all", "", false); err != nil {
 		p.App().Flash().Err(err)
 	}
 

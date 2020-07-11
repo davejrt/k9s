@@ -69,7 +69,7 @@ func (p *Pod) Get(ctx context.Context, path string) (runtime.Object, error) {
 func (p *Pod) List(ctx context.Context, ns string) ([]runtime.Object, error) {
 	sel, ok := ctx.Value(internal.KeyFields).(string)
 	if !ok {
-		return nil, fmt.Errorf("expecting a fieldSelector in context")
+		sel = ""
 	}
 	fsel, err := labels.ConvertSelectorToLabelsMap(sel)
 	if err != nil {
@@ -123,8 +123,13 @@ func (p *Pod) Logs(path string, opts *v1.PodLogOptions) (*restclient.Request, er
 		return nil, fmt.Errorf("user is not authorized to view pod logs")
 	}
 
+	dial, err := p.Client().Dial()
+	if err != nil {
+		return nil, err
+	}
+
 	ns, n := client.Namespaced(path)
-	return p.Client().DialOrDie().CoreV1().Pods(ns).GetLogs(n, opts), nil
+	return dial.CoreV1().Pods(ns).GetLogs(n, opts), nil
 }
 
 // Containers returns all container names on pod
@@ -155,7 +160,7 @@ func (p *Pod) Pod(fqn string) (string, error) {
 
 // GetInstance returns a pod instance.
 func (p *Pod) GetInstance(fqn string) (*v1.Pod, error) {
-	o, err := p.Factory.Get(p.gvr.String(), fqn, false, labels.Everything())
+	o, err := p.Factory.Get(p.gvr.String(), fqn, true, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +202,7 @@ func (p *Pod) TailLogs(ctx context.Context, c LogChan, opts LogOptions) error {
 	for _, co := range po.Spec.InitContainers {
 		log.Debug().Msgf("Tailing INIT-CO %q", co.Name)
 		opts.Container = co.Name
-		if err := p.TailLogs(ctx, c, opts); err != nil {
+		if err := tailLogs(ctx, p, c, opts); err != nil {
 			return err
 		}
 		tailed = true
@@ -225,6 +230,94 @@ func (p *Pod) TailLogs(ctx context.Context, c LogChan, opts LogOptions) error {
 
 	return nil
 }
+
+// ScanSA scans for serviceaccount refs.
+func (p *Pod) ScanSA(ctx context.Context, fqn string, wait bool) (Refs, error) {
+	ns, n := client.Namespaced(fqn)
+	oo, err := p.Factory.List(p.GVR(), ns, wait, labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+
+	refs := make(Refs, 0, len(oo))
+	for _, o := range oo {
+		var pod v1.Pod
+		err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.(*unstructured.Unstructured).Object, &pod)
+		if err != nil {
+			return nil, errors.New("expecting Deployment resource")
+		}
+		// Just pick controller less pods...
+		if len(pod.ObjectMeta.OwnerReferences) > 0 {
+			continue
+		}
+		if pod.Spec.ServiceAccountName == n {
+			refs = append(refs, Ref{
+				GVR: p.GVR(),
+				FQN: client.FQN(pod.Namespace, pod.Name),
+			})
+		}
+	}
+
+	return refs, nil
+}
+
+// Scan scans for cluster resource refs.
+func (p *Pod) Scan(ctx context.Context, gvr, fqn string, wait bool) (Refs, error) {
+	ns, n := client.Namespaced(fqn)
+	oo, err := p.Factory.List(p.GVR(), ns, wait, labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+
+	refs := make(Refs, 0, len(oo))
+	for _, o := range oo {
+		var pod v1.Pod
+		err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.(*unstructured.Unstructured).Object, &pod)
+		if err != nil {
+			return nil, errors.New("expecting Pod resource")
+		}
+		// Just pick controller less pods...
+		if len(pod.ObjectMeta.OwnerReferences) > 0 {
+			continue
+		}
+		switch gvr {
+		case "v1/configmaps":
+			if !hasConfigMap(&pod.Spec, n) {
+				continue
+			}
+			refs = append(refs, Ref{
+				GVR: p.GVR(),
+				FQN: client.FQN(pod.Namespace, pod.Name),
+			})
+		case "v1/secrets":
+			found, err := hasSecret(p.Factory, &pod.Spec, pod.Namespace, n, wait)
+			if err != nil {
+				log.Warn().Err(err).Msgf("locate secret %q", fqn)
+				continue
+			}
+			if !found {
+				continue
+			}
+			refs = append(refs, Ref{
+				GVR: p.GVR(),
+				FQN: client.FQN(pod.Namespace, pod.Name),
+			})
+		case "v1/persistentvolumeclaims":
+			if !hasPVC(&pod.Spec, n) {
+				continue
+			}
+			refs = append(refs, Ref{
+				GVR: p.GVR(),
+				FQN: client.FQN(pod.Namespace, pod.Name),
+			})
+		}
+	}
+
+	return refs, nil
+}
+
+// ----------------------------------------------------------------------------
+// Helpers...
 
 func tailLogs(ctx context.Context, logger Logger, c LogChan, opts LogOptions) error {
 	log.Debug().Msgf("Tailing logs for %q:%q", opts.Path, opts.Container)
@@ -269,9 +362,6 @@ func readLogs(stream io.ReadCloser, c LogChan, opts LogOptions) {
 		c <- opts.DecorateLog(bytes)
 	}
 }
-
-// ----------------------------------------------------------------------------
-// Helpers...
 
 func podMetricsFor(o runtime.Object, mmx *mv1beta1.PodMetricsList) *mv1beta1.PodMetrics {
 	if mmx == nil {

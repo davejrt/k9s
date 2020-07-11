@@ -29,7 +29,7 @@ var ExitStatus = ""
 
 const (
 	splashDelay      = 1 * time.Second
-	clusterRefresh   = 5 * time.Second
+	clusterRefresh   = 15 * time.Second
 	maxConRetry      = 15
 	clusterInfoWidth = 50
 	clusterInfoPad   = 15
@@ -88,12 +88,16 @@ func (a *App) Init(version string, rate int) error {
 		return errors.New("No client connection detected")
 	}
 	ns, err := a.Conn().Config().CurrentNamespaceName()
+	log.Debug().Msgf("CURRENT-NS %q -- %v", ns, err)
 	if err != nil {
-		log.Info().Msg("No namespace specified using all namespaces")
+		log.Info().Msg("No namespace specified using cluster default namespace")
+	} else if err = a.Config.SetActiveNamespace(ns); err != nil {
+		log.Error().Err(err).Msgf("Fail to set active namespace to %q", ns)
 	}
 
 	a.factory = watch.NewFactory(a.Conn())
-	if !a.isValidNS(ns) {
+	ok, err := a.isValidNS(ns)
+	if !ok && err == nil {
 		return fmt.Errorf("Invalid namespace %s", ns)
 	}
 	a.initFactory(ns)
@@ -111,6 +115,13 @@ func (a *App) Init(version string, rate int) error {
 	a.CmdBuff().SetSuggestionFn(a.suggestCommand())
 	a.CmdBuff().AddListener(a)
 
+	a.layout(ctx, version)
+	a.initSignals()
+
+	return nil
+}
+
+func (a *App) layout(ctx context.Context, version string) {
 	flash := ui.NewFlash(a.App)
 	go flash.Watch(ctx, a.Flash().Channel())
 
@@ -123,10 +134,6 @@ func (a *App) Init(version string, rate int) error {
 	a.Main.AddPage("main", main, true, false)
 	a.Main.AddPage("splash", ui.NewSplash(a.Styles, version), true, true)
 	a.toggleHeader(!a.Config.K9s.GetHeadless())
-
-	a.initSignals()
-
-	return nil
 }
 
 func (a *App) initSignals() {
@@ -134,8 +141,14 @@ func (a *App) initSignals() {
 	signal.Notify(sig, syscall.SIGABRT, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
 
 	go func(sig chan os.Signal) {
-		<-sig
-		nukeK9sShell(a.Conn())
+		signal := <-sig
+		if signal == syscall.SIGHUP {
+			a.BailOut()
+			return
+		}
+		if err := nukeK9sShell(a); err != nil {
+			log.Error().Err(err).Msg("nuking k9s shell pod")
+		}
 	}(sig)
 }
 
@@ -268,7 +281,10 @@ func (a *App) refreshCluster() {
 			if c != nil {
 				c.Start()
 			}
+		} else {
+			a.ClearStatus(true)
 		}
+		a.factory.ValidatePortForwards()
 	} else {
 		atomic.AddInt32(&a.conRetry, 1)
 		if c != nil {
@@ -303,29 +319,37 @@ func (a *App) switchNS(ns string) error {
 	if ns == client.ClusterScope {
 		ns = client.AllNamespaces
 	}
-	if !a.isValidNS(ns) {
+	ok, err := a.isValidNS(ns)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return fmt.Errorf("Invalid namespace %q", ns)
 	}
 	if err := a.Config.SetActiveNamespace(ns); err != nil {
 		return fmt.Errorf("Unable to save active namespace in config")
 	}
-	a.factory.SetActiveNS(ns)
 
-	return nil
+	return a.factory.SetActiveNS(ns)
 }
 
-func (a *App) isValidNS(ns string) bool {
+func (a *App) isValidNS(ns string) (bool, error) {
 	if ns == client.AllNamespaces || ns == client.NamespaceAll {
-		return true
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), client.CallTimeout)
-	defer cancel()
-	_, err := a.Conn().DialOrDie().CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
-	if err != nil {
-		log.Warn().Err(err).Msgf("Unable to find namespace %q", ns)
+		return true, nil
 	}
 
-	return err == nil
+	ctx, cancel := context.WithTimeout(context.Background(), a.Conn().Config().CallTimeout())
+	defer cancel()
+	dial, err := a.Conn().Dial()
+	if err != nil {
+		return false, err
+	}
+	_, err = dial.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+	if err != nil {
+		log.Warn().Err(err).Msgf("Validation failed for namespace: %q", ns)
+	}
+
+	return true, nil
 }
 
 func (a *App) switchCtx(name string, loadPods bool) error {
@@ -342,6 +366,11 @@ func (a *App) switchCtx(name string, loadPods bool) error {
 		if err := a.command.Reset(true); err != nil {
 			return err
 		}
+		v := a.Config.ActiveView()
+		if v == "" || isContextCmd(v) || loadPods {
+			v = "pod"
+			a.Config.SetActiveView(v)
+		}
 		if err := a.Config.Save(); err != nil {
 			log.Error().Err(err).Msg("Config save failed!")
 		}
@@ -349,10 +378,6 @@ func (a *App) switchCtx(name string, loadPods bool) error {
 
 		a.Flash().Infof("Switching context to %s", name)
 		a.ReloadStyles(name)
-		v := a.Config.ActiveView()
-		if v == "" || v == "ctx" || v == "context" {
-			v = "pod"
-		}
 		if err := a.gotoResource(v, "", true); loadPods && err != nil {
 			a.Flash().Err(err)
 		}
@@ -375,7 +400,9 @@ func (a *App) BailOut() {
 		}
 	}()
 
-	nukeK9sShell(a.Conn())
+	if err := nukeK9sShell(a); err != nil {
+		log.Error().Err(err).Msgf("nuking k9s shell pod")
+	}
 	a.factory.Terminate()
 	a.App.BailOut()
 }
@@ -490,6 +517,30 @@ func (a *App) gotoCmd(evt *tcell.EventKey) *tcell.EventKey {
 	return evt
 }
 
+func (a *App) meowCmd(msg string) {
+	if err := a.inject(NewMeow(a, msg)); err != nil {
+		a.Flash().Err(err)
+	}
+}
+
+func (a *App) dirCmd(path string) error {
+	log.Debug().Msgf("DIR PATH %q", path)
+	_, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if path == "." {
+		dir, err := os.Getwd()
+		if err == nil {
+			path = dir
+		}
+	}
+	a.Content.Stack.Clear()
+	a.cmdHistory.Push("dir " + path)
+
+	return a.inject(NewDir(path))
+}
+
 func (a *App) helpCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if a.CmdBuff().InCmdMode() {
 		return evt
@@ -525,13 +576,27 @@ func (a *App) aliasCmd(evt *tcell.EventKey) *tcell.EventKey {
 }
 
 func (a *App) gotoResource(cmd, path string, clearStack bool) error {
-	return a.command.run(cmd, path, clearStack)
+	err := a.command.run(cmd, path, clearStack)
+	if err == nil {
+		return err
+	}
+
+	c := NewMeow(a, err.Error())
+	_ = c.Init(context.Background())
+	if clearStack {
+		a.Content.Stack.Clear()
+	}
+	a.Content.Push(c)
+
+	return nil
 }
 
 func (a *App) inject(c model.Component) error {
 	ctx := context.WithValue(context.Background(), internal.KeyApp, a)
 	if err := c.Init(ctx); err != nil {
-		return fmt.Errorf("component init failed for %q %v", c.Name(), err)
+		log.Error().Err(err).Msgf("component init failed for %q %v", c.Name(), err)
+		c = NewMeow(a, err.Error())
+		_ = c.Init(ctx)
 	}
 	a.Content.Push(c)
 

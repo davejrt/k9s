@@ -49,6 +49,8 @@ func (c Container) ColorerFunc() ColorerFunc {
 			return DefaultColorer(ns, h, re)
 		}
 		switch strings.TrimSpace(re.Row.Fields[stateCol]) {
+		case Pending:
+			return PendingColor
 		case ContainerCreating, PodInitializing:
 			return AddColor
 		case Terminating, Initialized:
@@ -67,6 +69,7 @@ func (c Container) ColorerFunc() ColorerFunc {
 func (Container) Header(ns string) Header {
 	return Header{
 		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "PF"},
 		HeaderColumn{Name: "IMAGE"},
 		HeaderColumn{Name: "READY"},
 		HeaderColumn{Name: "STATE"},
@@ -101,6 +104,7 @@ func (c Container) Render(o interface{}, name string, r *Row) error {
 	r.ID = co.Container.Name
 	r.Fields = Fields{
 		co.Container.Name,
+		"●",
 		co.Container.Image,
 		ready,
 		state,

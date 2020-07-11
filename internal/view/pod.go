@@ -34,8 +34,22 @@ func NewPod(gvr client.GVR) ResourceViewer {
 	p.SetBindKeysFn(p.bindKeys)
 	p.GetTable().SetEnterFn(p.showContainers)
 	p.GetTable().SetColorerFn(render.Pod{}.ColorerFunc())
+	p.GetTable().SetDecorateFn(p.portForwardIndicator)
 
 	return &p
+}
+
+func (p *Pod) portForwardIndicator(data render.TableData) render.TableData {
+	ff := p.App().factory.Forwarders()
+
+	col := data.IndexOfHeader("PF")
+	for _, re := range data.RowEvents {
+		if ff.IsPodForwarded(re.Row.ID) {
+			re.Row.Fields[col] = "[orange::b]Ⓕ"
+		}
+	}
+
+	return decorateCpuMemHeaderRows(p.App(), data)
 }
 
 func (p *Pod) bindDangerousKeys(aa ui.KeyActions) {
@@ -52,18 +66,14 @@ func (p *Pod) bindKeys(aa ui.KeyActions) {
 	}
 
 	aa.Add(ui.KeyActions{
-		ui.KeyShiftR:   ui.NewKeyAction("Sort Ready", p.GetTable().SortColCmd(readyCol, true), false),
-		ui.KeyShiftT:   ui.NewKeyAction("Sort Restart", p.GetTable().SortColCmd("RESTARTS", false), false),
-		ui.KeyShiftS:   ui.NewKeyAction("Sort Status", p.GetTable().SortColCmd(statusCol, true), false),
-		ui.KeyShiftC:   ui.NewKeyAction("Sort CPU", p.GetTable().SortColCmd(cpuCol, false), false),
-		ui.KeyShiftM:   ui.NewKeyAction("Sort MEM", p.GetTable().SortColCmd(memCol, false), false),
-		ui.KeyShiftX:   ui.NewKeyAction("Sort %CPU (REQ)", p.GetTable().SortColCmd("%CPU", false), false),
-		ui.KeyShiftZ:   ui.NewKeyAction("Sort %MEM (REQ)", p.GetTable().SortColCmd("%MEM", false), false),
-		tcell.KeyCtrlX: ui.NewKeyAction("Sort %CPU (LIM)", p.GetTable().SortColCmd("%CPU/L", false), false),
-		tcell.KeyCtrlQ: ui.NewKeyAction("Sort %MEM (LIM)", p.GetTable().SortColCmd("%MEM/L", false), false),
-		ui.KeyShiftI:   ui.NewKeyAction("Sort IP", p.GetTable().SortColCmd("IP", true), false),
-		ui.KeyShiftO:   ui.NewKeyAction("Sort Node", p.GetTable().SortColCmd("NODE", true), false),
+		ui.KeyF:      ui.NewKeyAction("Show PortForward", p.showPFCmd, true),
+		ui.KeyShiftR: ui.NewKeyAction("Sort Ready", p.GetTable().SortColCmd(readyCol, true), false),
+		ui.KeyShiftT: ui.NewKeyAction("Sort Restart", p.GetTable().SortColCmd("RESTARTS", false), false),
+		ui.KeyShiftS: ui.NewKeyAction("Sort Status", p.GetTable().SortColCmd(statusCol, true), false),
+		ui.KeyShiftI: ui.NewKeyAction("Sort IP", p.GetTable().SortColCmd("IP", true), false),
+		ui.KeyShiftO: ui.NewKeyAction("Sort Node", p.GetTable().SortColCmd("NODE", true), false),
 	})
+	aa.Add(resourceSorters(p.GetTable()))
 }
 
 func (p *Pod) selectedContainer() string {
@@ -95,7 +105,31 @@ func (p *Pod) coContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, internal.KeyPath, p.GetTable().GetSelectedItem())
 }
 
-// Commands...
+// Handlers...
+
+func (p *Pod) showPFCmd(evt *tcell.EventKey) *tcell.EventKey {
+	path := p.GetTable().GetSelectedItem()
+	if path == "" {
+		return evt
+	}
+
+	if !p.App().factory.Forwarders().IsPodForwarded(path) {
+		p.App().Flash().Errf("no portforwards defined")
+		return nil
+	}
+	pf := NewPortForward(client.NewGVR("portforwards"))
+	pf.SetContextFn(p.portForwardContext)
+	if err := p.App().inject(pf); err != nil {
+		p.App().Flash().Err(err)
+	}
+
+	return nil
+}
+
+func (p *Pod) portForwardContext(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, internal.KeyBenchCfg, p.App().BenchFile)
+	return context.WithValue(ctx, internal.KeyPath, p.GetTable().GetSelectedItem())
+}
 
 func (p *Pod) killCmd(evt *tcell.EventKey) *tcell.EventKey {
 	sels := p.GetTable().GetSelectedItems()
@@ -317,4 +351,15 @@ func podIsRunning(f dao.Factory, path string) bool {
 	var re render.Pod
 	log.Debug().Msgf("Phase %#v", re.Phase(po))
 	return re.Phase(po) == render.Running
+}
+
+func resourceSorters(t *Table) ui.KeyActions {
+	return ui.KeyActions{
+		ui.KeyShiftC:   ui.NewKeyAction("Sort CPU", t.SortColCmd(cpuCol, false), false),
+		ui.KeyShiftM:   ui.NewKeyAction("Sort MEM", t.SortColCmd(memCol, false), false),
+		ui.KeyShiftX:   ui.NewKeyAction("Sort %CPU (REQ)", t.SortColCmd("%CPU/R", false), false),
+		ui.KeyShiftZ:   ui.NewKeyAction("Sort %MEM (REQ)", t.SortColCmd("%MEM/R", false), false),
+		tcell.KeyCtrlX: ui.NewKeyAction("Sort %CPU (LIM)", t.SortColCmd("%CPU/L", false), false),
+		tcell.KeyCtrlQ: ui.NewKeyAction("Sort %MEM (LIM)", t.SortColCmd("%MEM/L", false), false),
+	}
 }

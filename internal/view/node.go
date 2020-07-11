@@ -33,7 +33,7 @@ func NewNode(gvr client.GVR) ResourceViewer {
 }
 
 func (n *Node) bindKeys(aa ui.KeyActions) {
-	aa.Delete(ui.KeySpace, tcell.KeyCtrlSpace, tcell.KeyCtrlD)
+	aa.Delete(ui.KeySpace, tcell.KeyCtrlSpace, tcell.KeyCtrlX)
 	aa.Add(ui.KeyActions{
 		ui.KeyY:      ui.NewKeyAction("YAML", n.yamlCmd, true),
 		ui.KeyC:      ui.NewKeyAction("Cordon", n.toggleCordonCmd(true), true),
@@ -155,12 +155,17 @@ func (n *Node) yamlCmd(evt *tcell.EventKey) *tcell.EventKey {
 		return evt
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), client.CallTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), n.App().Conn().Config().CallTimeout())
 	defer cancel()
 
 	sel := n.GetTable().GetSelectedItem()
 	gvr := n.GVR().GVR()
-	o, err := n.App().factory.Client().DynDialOrDie().Resource(gvr).Get(ctx, sel, metav1.GetOptions{})
+	dial, err := n.App().factory.Client().DynDial()
+	if err != nil {
+		n.App().Flash().Err(err)
+		return nil
+	}
+	o, err := dial.Resource(gvr).Get(ctx, sel, metav1.GetOptions{})
 	if err != nil {
 		n.App().Flash().Errf("Unable to get resource %q -- %s", n.GVR(), err)
 		return nil

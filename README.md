@@ -57,43 +57,52 @@ K9s is available on Linux, macOS and Windows platforms.
   pacman -S k9s
   ```
 
+* On OpenSUSE Linux distribution
+
+  ```shell
+  zypper install k9s
+  ```
+
 * Via [Scoop](https://scoop.sh) for Windows
 
   ```shell
   scoop install k9s
   ```
 
-* Building from source
-   K9s was built using go 1.13 or above. In order to build K9 from source you must:
-   1. Clone the repo
-   2. Add the following command in your go.mod file
+* Via a GO install
 
-      ```text
-      replace (
-        github.com/derailed/k9s => MY_K9S_CLONED_GIT_REPO
-      )
+  ```shell
+  # NOTE: The dev version will be in effect!
+  go get -u github.com/derailed/k9s
+  ```
+
+---
+
+## Building From Source
+
+ K9s is currently using go v1.14 or above. In order to build K9 from source you must:
+
+ 1. Clone the repo
+ 2. Build and run the executable
+
+      ```shell
+      make build && ./execs/k9s
       ```
 
-   3. Build and run the executable
-
-        ```shell
-        go run main.go
-        ```
-
---- 
+---
 
 ## Running with Docker
- 
+
   You can run k9s as a Docker container by mounting your `KUBECONFIG`:
- 
+
   ```shell
-  docker run --rm -it -v $KUBECONFIG:/root/.kube/config derailed/k9s
+  docker run --rm -it -v $KUBECONFIG:/root/.kube/config quay.io/derailed/k9s
   ```
- 
+
   For default path it would be:
- 
+
   ```shell
-  docker run --rm -it -v ~/.kube/config:/root/.kube/config derailed/k9s
+  docker run --rm -it -v ~/.kube/config:/root/.kube/config quay.io/derailed/k9s
   ```
 
 ---
@@ -109,7 +118,10 @@ K9s is available on Linux, macOS and Windows platforms.
 * In order to issue manifest edit commands make sure your EDITOR env is set.
 
     ```shell
-       export EDITOR=my_fav_editor_here!
+    # Kubectl edit command will use this env var.
+    export EDITOR=my_fav_editor
+    # Should your editor deals with streamed vs on disk files differently, also set...
+    export K9S_EDITOR=my_fav_editor
     ```
 
 ---
@@ -158,25 +170,25 @@ k9s -l debug
 
 K9s uses aliases to navigate most K8s resources.
 
-| Action                                                        | Command               | Comment                                                     |
-|---------------------------------------------------------------|-----------------------|-------------------------------------------------------------|
-| Show active keyboard mnemonics and help                       | `?`                   |                                                             |
-| Show all available resource alias                             | `ctrl-a`              |                                                             |
-| To bail out of K9s                                            | `:q`, `ctrl-c`        |                                                             |
-| View a Kubernetes resource using singular/plural or shortname | `:`po⏎                | accepts singular, plural, shortname or alias ie pod or pods |
-| View a Kubernetes resource in a given namespace               | `:`alias namespace⏎   |                                                             |
-| Filter out a resource view given a filter                     | `/`filter⏎            |                                                             |
-| Filter resource view by labels                                | `/`-l label-selector⏎ |                                                             |
-| Fuzzy find a resource given a filter                          | `/`-f filter⏎         |                                                             |
-| Bails out of view/command/filter mode                         | `<esc>`               |                                                             |
-| Key mapping to describe, view, edit, view logs,...            | `d`,`v`, `e`, `l`,... |                                                             |
-| To view and switch to another Kubernetes context              | `:`ctx⏎               |                                                             |
-| To view and switch to another Kubernetes context              | `:`ctx context-name⏎  |                                                             |
-| To view and switch to another Kubernetes namespace            | `:`ns⏎                |                                                             |
-| To view all saved resources                                   | `:`screendump or sd⏎  |                                                             |
-| To delete a resource (TAB and ENTER to confirm)               | `ctrl-d`              |                                                             |
-| To kill a resource (no confirmation dialog!)                  | `ctrl-k`              |                                                             |
-| Launch pulses view                                            | `:`pulses or pu⏎      |                                                             |
+| Action                                                        | Command                       | Comment                                                                |
+|---------------------------------------------------------------|-------------------------------|------------------------------------------------------------------------|
+| Show active keyboard mnemonics and help                       | `?`                           |                                                                        |
+| Show all available resource alias                             | `ctrl-a`                      |                                                                        |
+| To bail out of K9s                                            | `:q`, `ctrl-c`                |                                                                        |
+| View a Kubernetes resource using singular/plural or shortname | `:`po⏎                        | accepts singular, plural, shortname or alias ie pod or pods            |
+| View a Kubernetes resource in a given namespace               | `:`alias namespace⏎           |                                                                        |
+| Filter out a resource view given a filter                     | `/`filter⏎                    |                                                                        |
+| Filter resource view by labels                                | `/`-l label-selector⏎         |                                                                        |
+| Fuzzy find a resource given a filter                          | `/`-f filter⏎                 |                                                                        |
+| Bails out of view/command/filter mode                         | `<esc>`                       |                                                                        |
+| Key mapping to describe, view, edit, view logs,...            | `d`,`v`, `e`, `l`,...         |                                                                        |
+| To view and switch to another Kubernetes context              | `:`ctx⏎                       |                                                                        |
+| To view and switch to another Kubernetes context              | `:`ctx context-name⏎          |                                                                        |
+| To view and switch to another Kubernetes namespace            | `:`ns⏎                        |                                                                        |
+| To view all saved resources                                   | `:`screendump or sd⏎          |                                                                        |
+| To delete a resource (TAB and ENTER to confirm)               | `ctrl-d`                      |                                                                        |
+| To kill a resource (no confirmation dialog!)                  | `ctrl-k`                      |                                                                        |
+| Launch pulses view                                            | `:`pulses or pu⏎              |                                                                        |
 | Launch XRay view                                              | `:`xray RESOURCE [NAMESPACE]⏎ | RESOURCE can be one of po, svc, dp, rs, sts, ds, NAMESPACE is optional |
 
 ---
@@ -236,12 +248,16 @@ K9s uses aliases to navigate most K8s resources.
   > NOTE: This is still in flux and will change while in pre-release stage!
 
   ```yaml
-  # config.yml
+  # $HOME/.k9s/config.yml
   k9s:
-    # Represents ui poll intervals.
+    # Represents ui poll intervals. Default 2secs
     refreshRate: 2
+    # Set to true to hide K9s header. Default false
+    headless: false
     # Indicates whether modification commands like delete/kill/edit are disabled. Default is false
     readOnly: false
+    # Toggles icons display as not all terminal support these chars.
+    noIcons: false
     # Logs configuration
     logger:
       # Defines the number of lines to return. Default 100
@@ -250,13 +266,19 @@ K9s uses aliases to navigate most K8s resources.
       buffer: 500
       # Represents how far to go back in the log timeline in seconds. Default is 5min
       sinceSeconds: 300
+      # Go full screen while displaying logs. Default false
+      fullScreenLogs: false
+      # Toggles log line wrap. Default false
+      textWrap: false
+      # Toggles log line timestamp info. Default false
+      showTime: false
     # Indicates the current kube context. Defaults to current context
     currentContext: minikube
     # Indicates the current kube cluster. Defaults to current context cluster
     currentCluster: minikube
     # Persists per cluster preferences for favorite namespaces and view.
     clusters:
-      cooln:
+      coolio:
         namespace:
           active: coolio
           favorites:
@@ -264,7 +286,22 @@ K9s uses aliases to navigate most K8s resources.
           - default
         view:
           active: po
-      minikube:
+        featureGates:
+          # Toggles nodeshell support. Allow K9s to shell into nodes if needed. Default false.
+          nodeShell: false
+        # Provide shell pod customization of feature gate is enabled
+        shellPod:
+          # The shell pod image to use.
+          image: killerAdmin
+          # The namespace to launch to shell pod into.
+          namespace: fred
+          # The resource limit to set on the shell pod.
+          limits:
+            cpu: 100m
+            memory: 100Mi
+        # The IP Address to use when launching a port-forward.
+        portForwardAddress: 1.2.3.4
+      kind:
         namespace:
           active: all
           favorites:
@@ -327,6 +364,40 @@ Entering the command mode and typing a resource name or alias, could be cumberso
 
 ---
 
+## Resource Custom Columns
+
+[SneakCast v0.17.0 on The Beach! - Yup! sound is sucking but what a setting!](https://youtu.be/7S33CNLAofk)
+
+You can change which columns shows up for a given resource via custom views. To surface this feature, you will need to create a new configuration file, namely `$HOME/.k9s/views.yml`. This file leverages GVR (Group/Version/Resource) to configure the associated table view columns. If no GVR is found for a view the default rendering will take over (ie what we have now). Going wide will add all the remaining columns that are available on the given resource after your custom columns. To boot, you can edit your views config file and tune your resources views live!
+
+> NOTE: This is experimental and will most likely change as we iron this out!
+
+Here is a sample views configuration that customize a pods and services views.
+
+```yaml
+# $HOME/.k9s/views.yml
+k9s:
+  views:
+    v1/pods:
+      columns:
+        - AGE
+        - NAMESPACE
+        - NAME
+        - IP
+        - NODE
+        - STATUS
+        - READY
+    v1/services:
+      columns:
+        - AGE
+        - NAMESPACE
+        - NAME
+        - TYPE
+        - CLUSTER-IP
+```
+
+---
+
 ## Plugins
 
 K9s allows you to extend your command line and tooling by defining your very own cluster commands via plugins. K9s will look at `$HOME/.k9s/plugin.yml` to locate all available plugins. A plugin is defined as follows:
@@ -355,12 +426,12 @@ K9s does provide additional environment variables for you to customize your plug
 
 ### Example
 
-This defines a plugin for viewing logs on a selected pod using `ctrl-l` for shorcut.
+This defines a plugin for viewing logs on a selected pod using `ctrl-l` for shortcut.
 
 ```yaml
 # $HOME/.k9s/plugin.yml
 plugin:
-  # Defines a plugin to provide a `ctrl-l` shorcut to tail the logs while in pod view.
+  # Defines a plugin to provide a `ctrl-l` shortcut to tail the logs while in pod view.
   fred:
     shortCut: Ctrl-L
     confirm: false

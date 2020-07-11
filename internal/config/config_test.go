@@ -261,7 +261,6 @@ func TestSetup(t *testing.T) {
 
 var expectedConfig = `k9s:
   refreshRate: 100
-  dockerShellImage: busybox:1.31
   headless: false
   readOnly: true
   noIcons: false
@@ -284,6 +283,13 @@ var expectedConfig = `k9s:
         active: po
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.31
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+      portForwardAddress: localhost
     fred:
       namespace:
         active: default
@@ -297,6 +303,13 @@ var expectedConfig = `k9s:
         active: po
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.31
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+      portForwardAddress: localhost
     minikube:
       namespace:
         active: kube-system
@@ -310,6 +323,13 @@ var expectedConfig = `k9s:
         active: ctx
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.31
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+      portForwardAddress: localhost
   thresholds:
     cpu:
       critical: 90
@@ -321,7 +341,6 @@ var expectedConfig = `k9s:
 
 var resetConfig = `k9s:
   refreshRate: 2
-  dockerShellImage: busybox:1.31
   headless: false
   readOnly: false
   noIcons: false
@@ -344,6 +363,13 @@ var resetConfig = `k9s:
         active: po
       featureGates:
         nodeShell: false
+      shellPod:
+        image: busybox:1.31
+        namespace: default
+        limits:
+          cpu: 100m
+          memory: 100Mi
+      portForwardAddress: localhost
   thresholds:
     cpu:
       critical: 90

@@ -14,11 +14,14 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
+// K9sConfig represents K9s configuration dir env var.
+const K9sConfig = "K9SCONFIG"
+
 var (
-	// K9sHome represent K9s home directory.
-	K9sHome = filepath.Join(mustK9sHome(), ".k9s")
+	// DefaultK9sHome represent K9s home directory.
+	DefaultK9sHome = filepath.Join(mustK9sHome(), ".k9s")
 	// K9sConfigFile represents K9s config file location.
-	K9sConfigFile = filepath.Join(K9sHome, "config.yml")
+	K9sConfigFile = filepath.Join(K9sHome(), "config.yml")
 	// K9sLogs represents K9s log.
 	K9sLogs = filepath.Join(os.TempDir(), fmt.Sprintf("k9s-%s.log", MustK9sUser()))
 	// K9sDumpDir represents a directory where K9s screen dumps will be persisted.
@@ -53,6 +56,15 @@ type (
 	}
 )
 
+// K9sHome returns k9s configs home directory.
+func K9sHome() string {
+	if env := os.Getenv(K9sConfig); env != "" {
+		return env
+	}
+
+	return DefaultK9sHome
+}
+
 // NewConfig creates a new default config.
 func NewConfig(ks KubeSettings) *Config {
 	return &Config{K9s: NewK9s(), settings: ks}
@@ -84,13 +96,13 @@ func (c *Config) Refine(flags *genericclioptions.ConfigFlags) error {
 	if c.K9s.CurrentContext == "" {
 		return errors.New("Invalid kubeconfig context detected")
 	}
-	ctx, ok := cfg.Contexts[c.K9s.CurrentContext]
+	context, ok := cfg.Contexts[c.K9s.CurrentContext]
 	if !ok {
 		return fmt.Errorf("The specified context %q does not exists in kubeconfig", c.K9s.CurrentContext)
 	}
-	c.K9s.CurrentCluster = ctx.Cluster
-	if len(ctx.Namespace) != 0 {
-		if err := c.SetActiveNamespace(ctx.Namespace); err != nil {
+	c.K9s.CurrentCluster = context.Cluster
+	if len(context.Namespace) != 0 {
+		if err := c.SetActiveNamespace(context.Namespace); err != nil {
 			return err
 		}
 	}
@@ -124,13 +136,6 @@ func (c *Config) CurrentCluster() *Cluster {
 
 // ActiveNamespace returns the active namespace in the current cluster.
 func (c *Config) ActiveNamespace() string {
-	if c.client != nil {
-		ns := c.client.ActiveNamespace()
-		if client.IsNamespaced(ns) {
-			return ns
-		}
-	}
-
 	if cl := c.CurrentCluster(); cl != nil {
 		if cl.Namespace != nil {
 			return cl.Namespace.Active
@@ -139,6 +144,7 @@ func (c *Config) ActiveNamespace() string {
 	return "default"
 }
 
+// ValidateFavorites ensure favorite ns are legit.
 func (c *Config) ValidateFavorites() {
 	cl := c.K9s.ActiveCluster()
 	if cl == nil {
@@ -162,9 +168,9 @@ func (c *Config) SetActiveNamespace(ns string) error {
 	if c.K9s.ActiveCluster() != nil {
 		return c.K9s.ActiveCluster().Namespace.SetActive(ns, c.settings)
 	}
-
 	err := errors.New("no active cluster. unable to set active namespace")
 	log.Error().Err(err).Msg("SetActiveNamespace")
+
 	return err
 }
 

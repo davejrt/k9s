@@ -10,7 +10,7 @@ import (
 )
 
 // K9sStylesFile represents K9s skins file location.
-var K9sStylesFile = filepath.Join(K9sHome, "skin.yml")
+var K9sStylesFile = filepath.Join(K9sHome(), "skin.yml")
 
 // StyleListener represents a skin's listener.
 type StyleListener interface {
@@ -69,6 +69,7 @@ type (
 		NewColor       Color `yaml:"newColor"`
 		ModifyColor    Color `yaml:"modifyColor"`
 		AddColor       Color `yaml:"addColor"`
+		PendingColor   Color `yaml:"pendingColor"`
 		ErrorColor     Color `yaml:"errorColor"`
 		HighlightColor Color `yaml:"highlightColor"`
 		KillColor      Color `yaml:"killColor"`
@@ -214,9 +215,9 @@ func newStyle() Style {
 
 func newCharts() Charts {
 	return Charts{
-		BgColor:            "default",
-		DialBgColor:        "default",
-		ChartBgColor:       "default",
+		BgColor:            "black",
+		DialBgColor:        "black",
+		ChartBgColor:       "black",
 		DefaultDialColors:  Colors{Color("palegreen"), Color("orangered")},
 		DefaultChartColors: Colors{Color("palegreen"), Color("orangered")},
 		ResourceColors: map[string]Colors{
@@ -258,6 +259,7 @@ func newStatus() Status {
 		NewColor:       "lightskyblue",
 		ModifyColor:    "greenyellow",
 		AddColor:       "dodgerblue",
+		PendingColor:   "darkorange",
 		ErrorColor:     "orangered",
 		HighlightColor: "aqua",
 		KillColor:      "mediumpurple",

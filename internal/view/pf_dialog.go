@@ -13,7 +13,7 @@ import (
 const portForwardKey = "portforward"
 
 // PortForwardCB represents a port-forward callback function.
-type PortForwardCB func(v ResourceViewer, path, co string, mapper client.PortTunnel)
+type PortForwardCB func(v ResourceViewer, path, co string, mapper []client.PortTunnel)
 
 // ShowPortForwards pops a port forwarding configuration dialog.
 func ShowPortForwards(v ResourceViewer, path string, ports []string, okFn PortForwardCB) {
@@ -27,7 +27,8 @@ func ShowPortForwards(v ResourceViewer, path string, ports []string, okFn PortFo
 		SetLabelColor(styles.K9s.Info.FgColor.Color()).
 		SetFieldTextColor(styles.K9s.Info.SectionColor.Color())
 
-	p1, p2, address := ports[0], extractPort(ports[0]), "localhost"
+	address := v.App().Config.CurrentCluster().PortForwardAddress
+	p1, p2 := ports[0], extractPort(ports[0])
 	f.AddInputField("Container Port:", p1, 30, nil, func(p string) {
 		p1 = p
 	})
@@ -41,12 +42,29 @@ func ShowPortForwards(v ResourceViewer, path string, ports []string, okFn PortFo
 	pages := v.App().Content.Pages
 
 	f.AddButton("OK", func() {
-		tunnel := client.PortTunnel{
-			Address:       address,
-			LocalPort:     p2,
-			ContainerPort: extractPort(p1),
+		pp1 := strings.Split(p1, ",")
+		pp2 := strings.Split(p2, ",")
+		if len(pp1) == 0 || len(pp1) != len(pp2) {
+			v.App().Flash().Err(fmt.Errorf("container to local port mismatch"))
+			return
 		}
-		okFn(v, path, extractContainer(p1), tunnel)
+
+		for _, p := range pp1 {
+			if !hasPort(p, ports) {
+				v.App().Flash().Err(fmt.Errorf("container port %q must match exposed ports %v", p, pp1))
+				return
+			}
+		}
+
+		var tt []client.PortTunnel
+		for i := range pp1 {
+			tt = append(tt, client.PortTunnel{
+				Address:       address,
+				LocalPort:     pp2[i],
+				ContainerPort: extractPort(pp1[i]),
+			})
+		}
+		okFn(v, path, extractContainer(pp1[0]), tt)
 	})
 	f.AddButton("Cancel", func() {
 		DismissPortForwards(v, pages)
@@ -71,6 +89,16 @@ func DismissPortForwards(v ResourceViewer, p *ui.Pages) {
 
 // ----------------------------------------------------------------------------
 // Helpers...
+
+func hasPort(port string, pp []string) bool {
+	for _, p := range pp {
+		if p == port {
+			return true
+		}
+	}
+
+	return false
+}
 
 func extractPort(p string) string {
 	rx := regexp.MustCompile(`\A([\w|-]+)/?([\w|-]+)?:?(\d+)?(╱UDP)?\z`)

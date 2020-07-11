@@ -30,6 +30,8 @@ func (p Pod) ColorerFunc() ColorerFunc {
 		}
 		status := strings.TrimSpace(re.Row.Fields[statusCol])
 		switch status {
+		case Pending:
+			c = PendingColor
 		case ContainerCreating, PodInitializing:
 			c = AddColor
 		case Initialized:
@@ -57,6 +59,7 @@ func (Pod) Header(ns string) Header {
 	return Header{
 		HeaderColumn{Name: "NAMESPACE"},
 		HeaderColumn{Name: "NAME"},
+		HeaderColumn{Name: "PF"},
 		HeaderColumn{Name: "READY"},
 		HeaderColumn{Name: "RESTARTS", Align: tview.AlignRight},
 		HeaderColumn{Name: "STATUS"},
@@ -95,6 +98,7 @@ func (p Pod) Render(o interface{}, ns string, r *Row) error {
 	r.Fields = Fields{
 		po.Namespace,
 		po.ObjectMeta.Name,
+		"●",
 		strconv.Itoa(cr) + "/" + strconv.Itoa(len(ss)),
 		strconv.Itoa(rc),
 		phase,
